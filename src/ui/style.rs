@@ -5,6 +5,9 @@ use ratatui::{
     widgets::{Block, Borders},
 };
 use std::env;
+use std::sync::OnceLock;
+
+static QUERIED_THEME: OnceLock<TerminalTheme> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TerminalTheme {
@@ -150,12 +153,97 @@ fn detect_terminal_theme() -> TerminalTheme {
     let configured_mode = Manager::new()
         .ok()
         .and_then(|manager| parse_theme_override(Some(&manager.config.tui_theme_mode)));
-    detect_terminal_theme_from_env_values(
-        env::var("SNOUT_TUI_THEME").ok().as_deref(),
-        env::var("COLORFGBG").ok().as_deref(),
-    )
-    .or(configured_mode)
-    .unwrap_or(TerminalTheme::Dark)
+    parse_theme_override(env::var("SNOUT_TUI_THEME").ok().as_deref())
+        .or(configured_mode)
+        .or_else(|| QUERIED_THEME.get().copied())
+        .or_else(|| {
+            detect_terminal_theme_from_env_values(None, env::var("COLORFGBG").ok().as_deref())
+        })
+        .unwrap_or(TerminalTheme::Dark)
+}
+
+pub(crate) fn query_terminal_background() {
+    #[cfg(unix)]
+    if let Some(theme) = query_osc_background() {
+        let _ = QUERIED_THEME.set(theme);
+    }
+}
+
+#[cfg(unix)]
+fn query_osc_background() -> Option<TerminalTheme> {
+    use std::io::{self, Write};
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    let stdin = io::stdin();
+    let fd = stdin.as_raw_fd();
+    if unsafe { libc::isatty(fd) } != 1 {
+        return None;
+    }
+    let mut stdout = io::stdout();
+    stdout.write_all(b"\x1b]11;?\x07").ok()?;
+    stdout.flush().ok()?;
+
+    let deadline = Instant::now() + Duration::from_millis(150);
+    let mut response = Vec::with_capacity(64);
+    while response.len() < 128 {
+        let timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as i32;
+        if timeout == 0 {
+            break;
+        }
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut pollfd, 1, timeout) } <= 0 {
+            break;
+        }
+        let mut byte = 0u8;
+        if unsafe { libc::read(fd, (&mut byte as *mut u8).cast(), 1) } != 1 {
+            break;
+        }
+        response.push(byte);
+        if byte == b'\x07' || response.ends_with(b"\x1b\\") {
+            if let Some(theme) = parse_osc_background(&response) {
+                return Some(theme);
+            }
+            response.clear();
+        }
+    }
+    None
+}
+
+pub(crate) fn parse_osc_background(response: &[u8]) -> Option<TerminalTheme> {
+    let start = response.windows(5).position(|part| part == b"\x1b]11;")? + 5;
+    let end = response[start..]
+        .iter()
+        .position(|byte| *byte == b'\x07' || *byte == b'\x1b')?
+        + start;
+    let color = std::str::from_utf8(&response[start..end]).ok()?;
+    let rgb = color.strip_prefix("rgb:")?;
+    let channels: Vec<u8> = rgb
+        .split('/')
+        .map(|part| {
+            if part.is_empty() || part.len() > 4 {
+                return None;
+            }
+            let value = u32::from_str_radix(part, 16).ok()?;
+            let max = (1u32 << (4 * part.len())) - 1;
+            Some((value * 255 / max) as u8)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let [r, g, b] = channels.as_slice() else {
+        return None;
+    };
+    let luma = (299u32 * *r as u32 + 587u32 * *g as u32 + 114u32 * *b as u32) / 1000;
+    Some(if luma >= 140 {
+        TerminalTheme::Light
+    } else {
+        TerminalTheme::Dark
+    })
 }
 
 pub(crate) fn detect_terminal_theme_from_env_values(
@@ -190,11 +278,11 @@ pub(crate) fn contrast_color(color: Color) -> Color {
         Color::Rgb(r, g, b) => {
             let luma = (299u32 * r as u32 + 587u32 * g as u32 + 114u32 * b as u32) / 1000;
             if luma >= 140 {
-                Color::Black
+                Color::Rgb(0, 0, 0)
             } else {
-                Color::White
+                Color::Rgb(255, 255, 255)
             }
         }
-        _ => Color::White,
+        _ => Color::Rgb(255, 255, 255),
     }
 }

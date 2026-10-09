@@ -53,6 +53,8 @@ paru -S snout-bin
 snout
 ```
 
+TUI 主题默认为 `auto`。在支持 OSC 11 的终端中，它会读取终端背景色选择浅色或暗色配色；不支持时继续参考 `COLORFGBG`，最后回退到暗色。可在 TUI 设置中手动选择主题，或用 `SNOUT_TUI_THEME=light` / `dark` 临时覆盖。
+
 启动交互式终端界面，使用 `↑↓/jk` 导航，`Enter` 确认，`q/Esc` 退出。
 
 ### 首次初始化
@@ -372,6 +374,8 @@ snout --scheme --mirror  # Update current scheme with mirror support (including 
 snout --update --proxy socks5://127.0.0.1:1080  # With proxy
 snout --lang en --update  # English interface
 ```
+
+The TUI theme defaults to `auto`. It reads the terminal background through OSC 11 when supported, then falls back to `COLORFGBG` and finally the dark palette. Choose a theme in TUI Settings or set `SNOUT_TUI_THEME=light` / `dark` to override it temporarily.
 
 ### JSON output
 

@@ -352,6 +352,7 @@ pub async fn run_tui() -> Result<()> {
 
     // 终端设置
     enable_raw_mode()?;
+    crate::ui::style::query_terminal_background();
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
@@ -3071,6 +3072,23 @@ mod tests {
     }
 
     #[test]
+    fn osc_background_response_detects_light_and_dark() {
+        use crate::ui::style::{parse_osc_background, TerminalTheme};
+        assert_eq!(
+            parse_osc_background(b"\x1b]11;rgb:f2f2/e9e9/e1e1\x07"),
+            Some(TerminalTheme::Light)
+        );
+        assert_eq!(
+            parse_osc_background(b"\x1b]11;rgb:1a/1b/1c\x1b\\"),
+            Some(TerminalTheme::Dark)
+        );
+        assert_eq!(
+            parse_osc_background(b"\x1b]10;rgb:ffff/ffff/ffff\x07"),
+            None
+        );
+    }
+
+    #[test]
     fn palette_switches_to_dark_text_for_light_terminals() {
         let light = crate::ui::style::UiPalette::for_theme(crate::ui::style::TerminalTheme::Light);
         let dark = crate::ui::style::UiPalette::for_theme(crate::ui::style::TerminalTheme::Dark);
@@ -3081,11 +3099,11 @@ mod tests {
         assert_eq!(dark.accent, ratatui::style::Color::Rgb(224, 163, 46));
         assert_eq!(
             crate::ui::style::contrast_color(light.selection_bg),
-            ratatui::style::Color::Black
+            ratatui::style::Color::Rgb(0, 0, 0)
         );
         assert_eq!(
             crate::ui::style::contrast_color(dark.selection_bg),
-            ratatui::style::Color::White
+            ratatui::style::Color::Rgb(255, 255, 255)
         );
     }
 
